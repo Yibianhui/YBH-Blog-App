@@ -1,11 +1,13 @@
-<# 一键同步到 GitHub：把当前改动提交并推送到 origin/main。
-# 用法（在项目根目录执行）：
-#   pwsh ./sync_to_github.ps1 [-Message "本次更新说明"]
+<# One-click sync to GitHub: commit local changes and push to origin/main.
+# Usage (run at project root):
+#   powershell -ExecutionPolicy Bypass -File ./sync_to_github.ps1 -Message "update notes"
 #
-# 首次使用前提：先配置远端（把下面地址换成你的仓库）：
-#   git remote add origin git@github.com:<用户名>/<仓库名>.git
-# 或 HTTPS：
-#   git remote add origin https://github.com/<用户名>/<仓库名>.git
+# First-time setup: add the remote (replace with your repo):
+#   git remote add origin git@github.com:<user>/<repo>.git
+#   # or HTTPS:
+#   git remote add origin https://github.com/<user>/<repo>.git
+# Then store a GitHub PAT in Windows Credential Manager (git credential approve)
+# so pushes are non-interactive.
 #>
 param(
   [string]$Message = ""
@@ -14,39 +16,39 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
 
-# 1) 确保位于仓库根。
+# 1) Ensure we are at the repo root.
 Set-Location $repo
 
-# 2) 远端校验。
+# 2) Verify remote exists.
 $remote = (git remote get-url origin 2>$null)
 if (-not $remote) {
-  Write-Host "错误：尚未配置 origin 远端。" -ForegroundColor Red
-  Write-Host "请先执行（替换成你的仓库地址）：" -ForegroundColor Yellow
-  Write-Host "  git remote add origin git@github.com:<用户名>/<仓库名>.git" -ForegroundColor Yellow
-  Write-Host "然后重试本脚本。" -ForegroundColor Yellow
+  Write-Host "ERROR: origin remote is not configured." -ForegroundColor Red
+  Write-Host "Run first (replace with your repo):" -ForegroundColor Yellow
+  Write-Host "  git remote add origin git@github.com:<user>/<repo>.git" -ForegroundColor Yellow
+  Write-Host "then rerun this script." -ForegroundColor Yellow
   exit 1
 }
 
-# 3) 拉取远端（rebase），避免非快进被拒。
-Write-Host ">> 拉取远端最新（rebase）..." -ForegroundColor Cyan
-git pull --rebase origin main 2>&1 | Out-Host
-
-# 4) 若有未提交改动则提交。
+# 3) Commit any uncommitted local changes first.
 $status = git status --porcelain
 if ($status) {
   $files = ($status | Measure-Object).Count
   if (-not $Message) {
-    $Message = "chore: 同步更新（$files 个文件改动）"
+    $Message = "chore: sync update, $files files changed"
   }
-  Write-Host ">> 暂存 $files 个改动并提交..." -ForegroundColor Cyan
+  Write-Host ">> Staging $files change(s) and committing..." -ForegroundColor Cyan
   git add -A
   git commit -q -m $Message
-  Write-Host "   提交完成：$Message" -ForegroundColor Green
+  Write-Host "   Committed: $Message" -ForegroundColor Green
 } else {
-  Write-Host ">> 没有本地改动需要提交。" -ForegroundColor Gray
+  Write-Host ">> No local changes to commit." -ForegroundColor Gray
 }
 
-# 5) 推送。
-Write-Host ">> 推送到 origin/main ..." -ForegroundColor Cyan
+# 4) Pull latest (rebase) onto remote so push is a fast-forward.
+Write-Host ">> Pulling latest from origin/main (rebase)..." -ForegroundColor Cyan
+git pull --rebase origin main 2>&1 | Out-Host
+
+# 5) Push.
+Write-Host ">> Pushing to origin/main ..." -ForegroundColor Cyan
 git push origin main 2>&1 | Out-Host
-Write-Host "完成。" -ForegroundColor Green
+Write-Host "Done." -ForegroundColor Green

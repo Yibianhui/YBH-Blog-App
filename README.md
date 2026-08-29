@@ -110,7 +110,7 @@ dart run flutter_native_splash:create # 重新生成启动屏
 
 本项目以 **MIT 许可证** 开源，详见 [LICENSE](./LICENSE)。
 
-- 仓库地址（GitHub）：<https://github.com/mchinm/yibianhui-blog>（如有调整请以实际仓库为准）
+- 仓库地址（GitHub）：<https://github.com/Yibianhui/YBH-Blog-App>
 - 欢迎通过 Issue / Pull Request 参与贡献。提交前请运行：
 
 ```powershell
