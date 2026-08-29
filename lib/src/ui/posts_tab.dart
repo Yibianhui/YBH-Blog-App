@@ -1,0 +1,365 @@
+import 'package:flutter/material.dart';
+
+import '../data/blog_api.dart';
+import '../data/category_order.dart';
+import 'post_card.dart';
+import 'post_detail_page.dart';
+
+/// 原生文章列表页（不依赖 WebView）：
+/// - WordPress REST API 拉取文章
+/// - 分类筛选 chips
+/// - 下拉刷新、触底加载更多、加载/错误状态
+class PostsTab extends StatefulWidget {
+  const PostsTab({super.key});
+
+  @override
+  State<PostsTab> createState() => PostsTabState();
+}
+
+class PostsTabState extends State<PostsTab> {
+  final ScrollController _scrollController = ScrollController();
+
+  List<PostSummary> _posts = const [];
+  List<BlogCategory> _categories = const [];
+  int? _selectedCategoryId;
+  bool _loading = true;
+  bool _loadingMore = false;
+  bool _categoriesLoading = true;
+  bool _hasMore = false;
+  Object? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+    _loadInitial();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_hasMore || _loadingMore || _loading) return;
+    final position = _scrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 400) {
+      _loadMore();
+    }
+  }
+
+  Future<void> _loadInitial() async {
+    await Future.wait([
+      _loadPosts(reset: true, showSpinner: true),
+      _loadCategories(),
+    ]);
+  }
+
+  Future<void> _loadCategories() async {
+    try {
+      final categories = await BlogApi.fetchCategories();
+      if (!mounted) return;
+      final order = await CategoryOrderStore.loadOrder();
+      final ordered = CategoryOrderStore.applyOrderWith(
+        categories: categories,
+        idOf: (c) => c.id,
+        order: order,
+      );
+      if (!mounted) return;
+      setState(() {
+        _categories = ordered;
+        _categoriesLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _categoriesLoading = false);
+    }
+  }
+
+  /// 分类排序页保存后调用：重新按本地顺序套用到已加载的分类。
+  Future<void> applyCategoryOrder() async {
+    if (_categoriesLoading || _categories.isEmpty) return;
+    final order = await CategoryOrderStore.loadOrder();
+    final ordered = CategoryOrderStore.applyOrderWith(
+      categories: _categories,
+      idOf: (c) => c.id,
+      order: order,
+    );
+    if (!mounted) return;
+    setState(() => _categories = ordered);
+  }
+
+  Future<void> _loadPosts({bool reset = false, bool showSpinner = false}) async {
+    if (showSpinner) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    final page = reset ? 1 : ((_posts.length ~/ 20) + 1);
+    try {
+      final result = await BlogApi.fetchPosts(
+        categoryId: _selectedCategoryId,
+        page: page,
+      );
+      if (!mounted) return;
+      setState(() {
+        if (reset) {
+          _posts = result.posts;
+        } else {
+          _posts = [..._posts, ...result.posts];
+        }
+        // 以累计条数与总数比较，避免最后一页不足一页时误判“还有更多”导致底部无限转圈。
+        _hasMore = _posts.length < result.total;
+        _loading = false;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e;
+      });
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore) return;
+    setState(() => _loadingMore = true);
+    try {
+      final page = (_posts.length ~/ 20) + 1;
+      final result = await BlogApi.fetchPosts(
+        categoryId: _selectedCategoryId,
+        page: page,
+      );
+      if (!mounted) return;
+      setState(() {
+        _posts = [..._posts, ...result.posts];
+        _hasMore = _posts.length < result.total;
+        _loadingMore = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingMore = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('加载更多失败，请稍后重试')),
+      );
+    }
+  }
+
+  Future<void> refresh() => _loadPosts(reset: true);
+
+  Future<void> _selectCategory(int? id) async {
+    if (_selectedCategoryId == id) return;
+    setState(() => _selectedCategoryId = id);
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+    await _loadPosts(reset: true, showSpinner: true);
+  }
+
+  void _openDetail(int index) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PostDetailPage(posts: _posts, initialIndex: index),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _CategoryFilterBar(
+          categories: _categories,
+          loading: _categoriesLoading,
+          selectedId: _selectedCategoryId,
+          onSelected: _selectCategory,
+        ),
+        const Divider(height: 1),
+        Expanded(child: _buildBody(context)),
+      ],
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    if (_loading) {
+      return const _PostsSkeleton();
+    }
+    if (_error != null) {
+      return _PostsError(
+        error: _error!,
+        onRetry: () => _loadPosts(reset: true, showSpinner: true),
+      );
+    }
+    if (_posts.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.article_outlined, size: 64, color: Theme.of(context).colorScheme.outline),
+            const SizedBox(height: 12),
+            Text('这个分类下暂时没有文章', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+          ],
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: () => _loadPosts(reset: true),
+      child: ListView.builder(
+        controller: _scrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+        itemCount: _posts.length + (_hasMore || _loadingMore ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (index >= _posts.length) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 16),
+              child: Center(
+                child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5)),
+              ),
+            );
+          }
+          final post = _posts[index];
+          return PostCard(
+            post: post,
+            onTap: () => _openDetail(index),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// 分类筛选横向滚动条。
+class _CategoryFilterBar extends StatelessWidget {
+  const _CategoryFilterBar({
+    required this.categories,
+    required this.loading,
+    required this.selectedId,
+    required this.onSelected,
+  });
+
+  final List<BlogCategory> categories;
+  final bool loading;
+  final int? selectedId;
+  final ValueChanged<int?> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
+      return const SizedBox(
+        height: 52,
+        child: Center(
+          child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      );
+    }
+    if (categories.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      height: 52,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FilterChip(
+              label: const Text('全部'),
+              selected: selectedId == null,
+              onSelected: (_) => onSelected(null),
+            ),
+          ),
+          for (final category in categories)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: FilterChip(
+                label: Text('${category.name} · ${category.count}'),
+                selected: selectedId == category.id,
+                onSelected: (_) => onSelected(category.id),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 加载骨架屏。
+class _PostsSkeleton extends StatelessWidget {
+  const _PostsSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final base = Theme.of(context).colorScheme.surfaceContainerHighest;
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+      itemCount: 6,
+      itemBuilder: (context, index) {
+        return Card(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: SizedBox(
+            height: 112,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(width: 112, height: 112, color: base),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(height: 15, color: base),
+                        const SizedBox(height: 8),
+                        Container(height: 15, width: 180, color: base),
+                        const SizedBox(height: 10),
+                        Container(height: 11, color: base),
+                        const SizedBox(height: 6),
+                        Container(height: 11, width: 120, color: base),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PostsError extends StatelessWidget {
+  const _PostsError({required this.error, required this.onRetry});
+
+  final Object error;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.wifi_off_rounded, size: 64, color: colorScheme.primary.withValues(alpha: 0.7)),
+            const SizedBox(height: 16),
+            const Text('文章加载失败', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            Text('请检查网络连接后重试。', style: TextStyle(color: colorScheme.onSurfaceVariant)),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('重新加载'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
