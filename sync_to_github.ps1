@@ -13,7 +13,6 @@ param(
   [string]$Message = ""
 )
 
-$ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
 
 # 1) Ensure we are at the repo root.
@@ -39,16 +38,31 @@ if ($status) {
   Write-Host ">> Staging $files change(s) and committing..." -ForegroundColor Cyan
   git add -A
   git commit -q -m $Message
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "!! git commit failed, aborting." -ForegroundColor Red
+    exit 1
+  }
   Write-Host "   Committed: $Message" -ForegroundColor Green
 } else {
   Write-Host ">> No local changes to commit." -ForegroundColor Gray
 }
 
 # 4) Pull latest (rebase) onto remote so push is a fast-forward.
+# Note: git writes progress info to stderr; that is normal and not an error.
 Write-Host ">> Pulling latest from origin/main (rebase)..." -ForegroundColor Cyan
-git pull --rebase origin main 2>&1 | Out-Host
+$out = git pull --rebase origin main 2>&1 | Out-String
+Write-Host $out
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "!! git pull --rebase failed (possible conflict). Resolve manually, then rerun." -ForegroundColor Red
+  exit 1
+}
 
 # 5) Push.
 Write-Host ">> Pushing to origin/main ..." -ForegroundColor Cyan
-git push origin main 2>&1 | Out-Host
+$push = git push origin main 2>&1 | Out-String
+Write-Host $push
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "!! git push failed." -ForegroundColor Red
+  exit 1
+}
 Write-Host "Done." -ForegroundColor Green

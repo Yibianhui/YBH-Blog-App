@@ -138,5 +138,6 @@ git push -u origin main
 pwsh ./sync_to_github.ps1 -Message "本次更新说明"
 ```
 
-> 注意：`sync_to_github.ps1` 会先 `git pull --rebase` 再推送，避免非快进冲突；如有冲突需手动解决后重跑。
+> 注意：`sync_to_github.ps1` 会先提交本地改动、`git pull --rebase` 再推送，避免非快进冲突；如有冲突需手动解决后重跑。
+> 首次使用前需把 GitHub 个人访问令牌（PAT，含 `repo` 权限）存入 Windows 凭据管理器（`git credential approve`），方可免交互推送。
 
