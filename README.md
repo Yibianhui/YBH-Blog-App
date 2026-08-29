@@ -121,3 +121,22 @@ flutter test
 - 分类顺序等用户偏好仅保存在本机 `SharedPreferences`，不会上传。
 - 发布构建产物（APK / Web / 源码包）归档在同级目录 `YBH-blog-release/`，不纳入本源码仓库。
 
+## 同步到 GitHub
+
+首次推送前先添加远端（把 `<用户名>/<仓库名>` 换成你的仓库）：
+
+```powershell
+git remote add origin git@github.com:<用户名>/<仓库名>.git
+# 或 HTTPS：
+# git remote add origin https://github.com/<用户名>/<仓库名>.git
+git push -u origin main
+```
+
+之后每次本地有改动要同步，运行仓库根目录的脚本即可（会自动拉取、提交、推送）：
+
+```powershell
+pwsh ./sync_to_github.ps1 -Message "本次更新说明"
+```
+
+> 注意：`sync_to_github.ps1` 会先 `git pull --rebase` 再推送，避免非快进冲突；如有冲突需手动解决后重跑。
+
