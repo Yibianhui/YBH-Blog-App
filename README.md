@@ -11,6 +11,9 @@
 
 - **三栏外壳**：「文章」（REST 原生列表）+「整站」（WebView 完整体验）+「我的」
 - **原生文章列表**：分类筛选、卡片式布局（随机封面/标题/摘要/日期/标签）、下拉刷新、骨架屏、错误重试
+  - **分类联网获取**：分类由 WordPress REST API（`/wp-json/wp/v2/categories`）实时拉取，按文章数降序
+  - **分类排序页**：在「我的 → 分类排序」中可拖拽调整筛选条分类的显示顺序，顺序仅保存在本机，
+    不影响服务器；实现见 `lib/src/data/category_order.dart`、`lib/src/ui/category_order_page.dart`
 - **原生文章详情**：移动端用 WebView 阅读器完整渲染正文（站点 CSS 样式 /
   自定义字体 base64 内嵌 / 图片自适应与懒加载 / Ruby 振假名 / 代码块语言标签与复制），
   支持选中复制，分享 / 浏览器打开；无法使用 WebView 的平台（Web/桌面）退回 flutter_html 排版
@@ -102,3 +105,19 @@ dart run flutter_native_splash:create # 重新生成启动屏
 
 - 站点地址与域名白名单集中在 `lib/src/app_config.dart`。
 - 项目首次构建时 Gradle 已通过腾讯云镜像下载并缓存；若换机器构建网络较慢，可自行修改 `android/gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl` 指向镜像。
+
+## 开源与许可证
+
+本项目以 **MIT 许可证** 开源，详见 [LICENSE](./LICENSE)。
+
+- 仓库地址（GitHub）：<https://github.com/mchinm/yibianhui-blog>（如有调整请以实际仓库为准）
+- 欢迎通过 Issue / Pull Request 参与贡献。提交前请运行：
+
+```powershell
+flutter analyze
+flutter test
+```
+
+- 分类顺序等用户偏好仅保存在本机 `SharedPreferences`，不会上传。
+- 发布构建产物（APK / Web / 源码包）归档在同级目录 `YBH-blog-release/`，不纳入本源码仓库。
+

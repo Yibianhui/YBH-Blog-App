@@ -197,9 +197,8 @@ class _CategoryOrderPageState extends State<CategoryOrderPage> {
           child: ReorderableListView.builder(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             itemCount: _categories.length,
-            onReorder: (oldIndex, newIndex) {
+            onReorderItem: (oldIndex, newIndex) {
               setState(() {
-                if (oldIndex < newIndex) newIndex -= 1;
                 final item = _categories.removeAt(oldIndex);
                 _categories.insert(newIndex, item);
               });
