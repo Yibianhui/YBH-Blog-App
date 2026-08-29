@@ -50,3 +50,13 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# 本地诊断/临时产物（构建、同步脚本运行时的日志，不入库）
+.push_*.txt
+.f.txt
+.ferr.txt
+.pl.txt
+.plerr.txt
+.rc*.txt
+.po*.txt
+
