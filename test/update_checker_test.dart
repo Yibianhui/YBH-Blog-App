@@ -27,5 +27,19 @@ void main() {
       expect(UpdateChecker.isNewerVersion('0.9.9', '1.0.0'), isTrue);
       expect(UpdateChecker.isNewerVersion('0.0.1', '0.0.1'), isFalse);
     });
+
+    test('0.0.X 递增跨两位数（0.0.9 → 0.0.10）按数值而非字符串判定', () {
+      // 版本号来到两位数后，必须按数值比较：'0.0.10' 按字符串会小于 '0.0.9'，
+      // 按数值则正确大于。这里锁住该行为，避免老版本 App 收不到更新提示。
+      expect(UpdateChecker.parseVersion('0.0.10'), (0, 0, 10));
+      expect(UpdateChecker.isNewerVersion('0.0.9', '0.0.10'), isTrue);
+      expect(UpdateChecker.isNewerVersion('0.0.10', '0.0.9'), isFalse);
+      expect(UpdateChecker.isNewerVersion('0.0.10', '0.0.10'), isFalse);
+    });
+
+    test('次版本号跃迁（0.0.9 → 0.1.0）判定为更新', () {
+      expect(UpdateChecker.isNewerVersion('0.0.9', '0.1.0'), isTrue);
+      expect(UpdateChecker.isNewerVersion('0.1.0', '0.0.9'), isFalse);
+    });
   });
 }

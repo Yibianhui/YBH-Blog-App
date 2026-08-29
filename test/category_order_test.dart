@@ -51,4 +51,104 @@ void main() {
     );
     expect(ordered.map(idOf).toList(), equals([10]));
   });
+
+  test('置顶分类排在最前，优先于自定义顺序', () {
+    final server = [cat(1, 'A'), cat(2, 'B'), cat(3, 'C')];
+    final ordered = CategoryOrderStore.applyOrderWith(
+      categories: server,
+      idOf: idOf,
+      order: const [1, 2, 3],
+      pinned: const [3],
+    );
+    expect(ordered.map(idOf).toList(), equals([3, 1, 2]));
+  });
+
+  test('多个置顶分类按 pinned 列表顺序排列', () {
+    final server = [cat(1, 'A'), cat(2, 'B'), cat(3, 'C'), cat(4, 'D')];
+    final ordered = CategoryOrderStore.applyOrderWith(
+      categories: server,
+      idOf: idOf,
+      order: const [1, 2, 3, 4],
+      pinned: const [4, 2],
+    );
+    expect(ordered.map(idOf).toList(), equals([4, 2, 1, 3]));
+  });
+
+  test('excludeHidden 为真时剔除隐藏分类', () {
+    final server = [cat(1, 'A'), cat(2, 'B'), cat(3, 'C')];
+    final ordered = CategoryOrderStore.applyOrderWith(
+      categories: server,
+      idOf: idOf,
+      order: const [1, 2, 3],
+      hidden: const [2],
+      excludeHidden: true,
+    );
+    expect(ordered.map(idOf).toList(), equals([1, 3]));
+  });
+
+  test('excludeHidden 为假时保留隐藏分类（排序页需要展示以便恢复）', () {
+    final server = [cat(1, 'A'), cat(2, 'B'), cat(3, 'C')];
+    final ordered = CategoryOrderStore.applyOrderWith(
+      categories: server,
+      idOf: idOf,
+      order: const [1, 2, 3],
+      hidden: const [2],
+      excludeHidden: false,
+    );
+    expect(ordered.map(idOf).toList(), equals([1, 2, 3]));
+  });
+
+  test('隐藏优先于置顶：同时置顶与隐藏的分类不显示', () {
+    // 隐藏是更强的意图；UI 层在置顶时会自动取消隐藏，两者实际互斥，
+    // 这里仅约定合并函数在状态残留（旧数据）时的行为。
+    final server = [cat(1, 'A'), cat(2, 'B'), cat(3, 'C')];
+    final ordered = CategoryOrderStore.applyOrderWith(
+      categories: server,
+      idOf: idOf,
+      order: const [1, 2, 3],
+      pinned: const [2],
+      hidden: const [2],
+      excludeHidden: true,
+    );
+    expect(ordered.map(idOf).toList(), equals([1, 3]));
+  });
+
+  test('置顶分类先于自定义顺序，且不重复出现', () {
+    final server = [cat(1, 'A'), cat(2, 'B'), cat(3, 'C')];
+    final ordered = CategoryOrderStore.applyOrderWith(
+      categories: server,
+      idOf: idOf,
+      // 自定义顺序里也写了 3（与 pinned 重复），结果中 3 只应出现一次。
+      order: const [1, 3, 2],
+      pinned: const [3],
+    );
+    expect(ordered.map(idOf).toList(), equals([3, 1, 2]));
+  });
+
+  test('全部隐藏时结果为空', () {
+    final server = [cat(1, 'A'), cat(2, 'B')];
+    final ordered = CategoryOrderStore.applyOrderWith(
+      categories: server,
+      idOf: idOf,
+      order: const [1, 2],
+      hidden: const [1, 2],
+      excludeHidden: true,
+    );
+    expect(ordered, isEmpty);
+  });
+
+  test('CategoryPrefs 为空时视为未设置', () {
+    expect(const CategoryPrefs().isEmpty, isTrue);
+    expect(const CategoryPrefs(order: [1]).isEmpty, isFalse);
+    expect(const CategoryPrefs(pinned: {1}).isEmpty, isFalse);
+    expect(const CategoryPrefs(hidden: {1}).isEmpty, isFalse);
+  });
+
+  test('CategoryPrefs.copyWith 只覆盖传入字段', () {
+    const prefs = CategoryPrefs(order: [1, 2], pinned: {1}, hidden: {3});
+    final next = prefs.copyWith(hidden: const {});
+    expect(next.order, equals([1, 2]));
+    expect(next.pinned, equals({1}));
+    expect(next.hidden, isEmpty);
+  });
 }

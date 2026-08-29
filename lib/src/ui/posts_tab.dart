@@ -20,6 +20,9 @@ class PostsTabState extends State<PostsTab> {
   final ScrollController _scrollController = ScrollController();
 
   List<PostSummary> _posts = const [];
+  /// 服务器原始分类（按文章数降序），作为套用本地偏好的基准。
+  List<BlogCategory> _rawCategories = const [];
+  /// 套用本地偏好（置顶/排序/隐藏）后、实际用于筛选条展示的分类。
   List<BlogCategory> _categories = const [];
   int? _selectedCategoryId;
   bool _loading = true;
@@ -60,34 +63,51 @@ class PostsTabState extends State<PostsTab> {
     try {
       final categories = await BlogApi.fetchCategories();
       if (!mounted) return;
-      final order = await CategoryOrderStore.loadOrder();
-      final ordered = CategoryOrderStore.applyOrderWith(
-        categories: categories,
-        idOf: (c) => c.id,
-        order: order,
-      );
+      final prefs = await CategoryOrderStore.load();
       if (!mounted) return;
       setState(() {
-        _categories = ordered;
+        _rawCategories = categories;
+        _categories = _applyPrefs(categories, prefs);
         _categoriesLoading = false;
       });
+      await _deselectHidden(prefs);
     } catch (_) {
       if (!mounted) return;
       setState(() => _categoriesLoading = false);
     }
   }
 
-  /// 分类排序页保存后调用：重新按本地顺序套用到已加载的分类。
-  Future<void> applyCategoryOrder() async {
-    if (_categoriesLoading || _categories.isEmpty) return;
-    final order = await CategoryOrderStore.loadOrder();
-    final ordered = CategoryOrderStore.applyOrderWith(
-      categories: _categories,
+  /// 套用本地偏好：置顶优先 → 自定义顺序 → 服务器顺序，并剔除已隐藏的分类。
+  List<BlogCategory> _applyPrefs(List<BlogCategory> base, CategoryPrefs prefs) {
+    return CategoryOrderStore.applyOrderWith<BlogCategory>(
+      categories: base,
       idOf: (c) => c.id,
-      order: order,
+      order: prefs.order,
+      pinned: prefs.pinned.toList(),
+      hidden: prefs.hidden.toList(),
+      excludeHidden: true,
     );
+  }
+
+  /// 若当前选中的分类被隐藏了，退回「全部」并重新拉文章。
+  Future<void> _deselectHidden(CategoryPrefs prefs) async {
+    final selected = _selectedCategoryId;
+    if (selected == null) return;
+    if (!prefs.hidden.contains(selected) || prefs.pinned.contains(selected)) {
+      return;
+    }
     if (!mounted) return;
-    setState(() => _categories = ordered);
+    setState(() => _selectedCategoryId = null);
+    await _loadPosts(reset: true, showSpinner: true);
+  }
+
+  /// 分类排序页保存后调用：重新按本地偏好套用到已加载的分类。
+  Future<void> applyCategoryOrder() async {
+    if (_categoriesLoading || _rawCategories.isEmpty) return;
+    final prefs = await CategoryOrderStore.load();
+    if (!mounted) return;
+    setState(() => _categories = _applyPrefs(_rawCategories, prefs));
+    await _deselectHidden(prefs);
   }
 
   Future<void> _loadPosts({bool reset = false, bool showSpinner = false}) async {
@@ -149,6 +169,9 @@ class PostsTabState extends State<PostsTab> {
   }
 
   Future<void> refresh() => _loadPosts(reset: true);
+
+  /// 服务器原始分类（未套用本地偏好），供「分类排序」页直接复用，避免重复联网。
+  List<BlogCategory> get rawCategories => _rawCategories;
 
   Future<void> _selectCategory(int? id) async {
     if (_selectedCategoryId == id) return;

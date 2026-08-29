@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app_config.dart';
+import '../data/blog_api.dart';
 import '../data/update_checker.dart';
 import '../ui/profile_tab.dart';
 import '../ui/posts_tab.dart';
@@ -121,10 +122,14 @@ class _HomeShellPageState extends State<HomeShellPage> {
     }
   }
 
-  /// 打开「分类排序」页；若用户保存了新顺序，则通知「文章」页立即重排分类筛选条。
+  /// 打开「分类排序」页；若用户保存了新偏好，则通知「文章」页立即重排分类筛选条。
   Future<void> _openCategoryOrder() async {
+    // 复用「文章」页已拉取的原始分类，省掉一次联网请求。
+    final loaded = _postsKey.currentState?.rawCategories ?? const <BlogCategory>[];
     final result = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const CategoryOrderPage()),
+      MaterialPageRoute<bool>(
+        builder: (_) => CategoryOrderPage(initialCategories: loaded),
+      ),
     );
     if (result == true && mounted) {
       _postsKey.currentState?.applyCategoryOrder();

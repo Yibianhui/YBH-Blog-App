@@ -66,24 +66,74 @@ class BlogWebViewState extends State<BlogWebViewPage> {
 })();
 ''';
 
-  /// 在 wp-login.php 页面填表并提交的脚本。
+  /// 在登录页填表并提交的脚本。
   ///
-  /// 凭据以 JSON 字符串嵌入（避免引号/反斜杠注入）。返回 'ok' 表示
-  /// 表单已提交；'no-form' 表示页面结构不符（可能是错误页/重定向页）。
+  /// 凭据以 JSON 字符串嵌入（避免引号/反斜杠注入）。返回值为诊断用字符串：
+  /// - `'ok'` 表单已提交；
+  /// - `'no-form'` 页面上找不到密码输入框（可能是错误页/已登录的重定向页）；
+  /// - `'no-user-field'` 表单里找不到用户名输入框。
+  ///
+  /// 站点主题（Sakurairo）可能用自己的登录表单而非标准 wp-login 结构，
+  /// 因此这里不依赖 `#user_login` / `#loginform` 等固定 id，改为：
+  /// 先定位密码框 → 取其所属 form → 在 form 内找用户名框（按常见 name/id 依次回退）。
+  /// 提交时优先 `requestSubmit()`（会触发主题绑定的校验与 AJAX 逻辑），
+  /// 失败再退回点击提交按钮、最后才是 `form.submit()`。
   static String _loginScript(String user, String pass) {
     final u = jsonEncode(user);
     final p = jsonEncode(pass);
     return '''
 (function () {
   var u = $u, p = $p;
-  var user = document.getElementById('user_login') || document.querySelector('input[name="log"]');
-  var pass = document.getElementById('user_pass') || document.querySelector('input[name="pwd"]');
-  if (!user || !pass) return 'no-form';
-  user.value = u;
-  pass.value = p;
-  var form = document.getElementById('loginform') || user.form;
+  var pass = document.querySelector('input[type="password"]');
+  if (!pass) return 'no-form';
+  var form = pass.form;
   if (!form) return 'no-form';
-  form.submit();
+  var user = form.querySelector('input[name="log"]')
+          || form.querySelector('#user_login')
+          || form.querySelector('input[name="username"]')
+          || form.querySelector('input[name="user_login"]')
+          || form.querySelector('input[autocomplete="username"]')
+          || form.querySelector('input[type="email"]')
+          || form.querySelector('input[type="text"]');
+  if (!user) return 'no-user-field';
+
+  // 用原生 setter 赋值并派发事件，确保 Vue/React 等框架能感知到输入。
+  function setVal(el, v) {
+    var proto = el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && desc.set) { desc.set.call(el, v); } else { el.value = v; }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  setVal(user, u);
+  setVal(pass, p);
+
+  // 勾上「记住我」，让整站会话在下次冷启动仍然有效。
+  var remember = form.querySelector('input[name="rememberme"]');
+  if (remember && !remember.checked) {
+    remember.checked = true;
+    remember.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  var btn = form.querySelector('input[type="submit"]')
+         || form.querySelector('button[type="submit"]')
+         || form.querySelector('button');
+  var fired = false;
+  form.addEventListener('submit', function () { fired = true; });
+
+  // requestSubmit 会走表单校验与主题绑定的 submit 处理器，是首选。
+  if (typeof form.requestSubmit === 'function') {
+    try { form.requestSubmit(btn || undefined); } catch (e) {}
+  }
+  // 若没触发 submit 事件（主题用 click 处理器），退回到点击按钮。
+  if (!fired && btn) {
+    try { btn.click(); } catch (e) {}
+  }
+  // 最后兜底：直接提交（不触发 submit 事件，但一定会导航）。
+  if (!fired) {
+    try { form.submit(); } catch (e) {}
+  }
   return 'ok';
 })();
 ''';
@@ -94,6 +144,10 @@ class BlogWebViewState extends State<BlogWebViewPage> {
 
   /// 是否正在执行自动登录（页面完成回调里判断是否要填表提交）。
   bool _autoLogging = false;
+
+  /// 自动登录成功后要回到的页面（登录前正在浏览的站内地址）。
+  /// 为空表示回站点首页。
+  String? _autoLoginReturnUrl;
 
   WebViewUiState get _ui => widget.uiState;
 
@@ -122,13 +176,22 @@ class BlogWebViewState extends State<BlogWebViewPage> {
               final creds = wpAuth.webLoginCredentials;
               if (creds != null) {
                 try {
-                  await _controller.runJavaScript(
+                  final result = await _controller.runJavaScriptReturningResult(
                     _loginScript(creds.$1, creds.$2),
                   );
+                  // 页面不是登录表单（可能已登录被重定向，或主题换了结构）：
+                  // 主动回到目标页面，避免停在无意义的中间页。
+                  if (result is String && result.startsWith('no-')) {
+                    final target = _autoLoginReturnUrl;
+                    if (target != null && target.isNotEmpty) {
+                      await _controller.loadRequest(Uri.parse(target));
+                    }
+                  }
                 } catch (_) {
                   // 忽略：自动登录失败不阻塞用户手动登录。
                 }
               }
+              _autoLoginReturnUrl = null;
             }
             // 仅调试构建开启远程调试（CDP），便于真机验证登录态/渲染。
             if (kDebugMode) {
@@ -182,13 +245,32 @@ class BlogWebViewState extends State<BlogWebViewPage> {
   }
 
   /// 开始自动登录：导航到 wp-login.php，页面加载完自动填表提交。
-  void _startAutoLogin() {
+  ///
+  /// [returnTo] 指定登录成功后要回到的页面；不传则取当前正在浏览的页面，
+  /// 这样「整站」登录后能回到原处而不是被踢回首页。
+  void _startAutoLogin({String? returnTo}) {
     if (_autoLogging) return;
     _autoLogging = true;
     _ui.hasError.value = false;
+    _autoLoginReturnUrl = _resolveReturnUrl(returnTo ?? _ui.currentUrl.value);
     _controller.loadRequest(
-      Uri.parse('${AppConfig.blogUrl}/wp-login.php?redirect_to=${Uri.encodeComponent('${AppConfig.blogUrl}/')}'),
+      Uri.parse(
+        '${AppConfig.blogUrl}/wp-login.php'
+        '?redirect_to=${Uri.encodeComponent(_autoLoginReturnUrl!)}',
+      ),
     );
+  }
+
+  /// 决定登录成功后回到哪里。
+  ///
+  /// 仅接受站内地址；登录页自身、空地址、站外地址一律退回站点首页兜底，
+  /// 避免把 `redirect_to` 指向登录页造成死循环。
+  String _resolveReturnUrl(String? url) {
+    const home = '${AppConfig.blogUrl}/';
+    if (url == null || url.isEmpty) return home;
+    if (url.contains('wp-login.php')) return home;
+    if (!AppConfig.isInAppUrl(url)) return home;
+    return url;
   }
 
   /// 退出登录：清空 WebView Cookie 并回到首页（整站随即呈未登录态）。

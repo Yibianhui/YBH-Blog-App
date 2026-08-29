@@ -1,19 +1,26 @@
 # YBH · 义编会 WordPress 博客客户端
 
+[![CI](https://github.com/Yibianhui/YBH-Blog-App/actions/workflows/ci.yml/badge.svg)](https://github.com/Yibianhui/YBH-Blog-App/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Flutter](https://img.shields.io/badge/Flutter-Dart%203.13-blue.svg)](https://flutter.dev)
+[![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20Web-lightgrey.svg)](https://github.com/Yibianhui/YBH-Blog-App)
+
 多平台 Flutter 应用，内嵌 WordPress 博客站点：<https://www.yibianhui.cn>
 
 - **当前重点：Android APK**（已构建、可安装）
 - 其他平台：iOS（已生成工程，需 macOS/Xcode 构建）、Web（已构建 PWA）、Windows/macOS/Linux（桌面壳，跳转系统浏览器）
 
-> 版本号采用 `0.0.X` 格式：X 每进行一次小改动 +1（当前 0.0.9）。
+> 版本号采用 `0.0.X` 格式：X 每次发版 +1（当前 0.0.10）。
 
 ## 功能
 
 - **三栏外壳**：「文章」（REST 原生列表）+「整站」（WebView 完整体验）+「我的」
 - **原生文章列表**：分类筛选、卡片式布局（随机封面/标题/摘要/日期/标签）、下拉刷新、骨架屏、错误重试
   - **分类联网获取**：分类由 WordPress REST API（`/wp-json/wp/v2/categories`）实时拉取，按文章数降序
-  - **分类排序页**：在「我的 → 分类排序」中可拖拽调整筛选条分类的显示顺序，顺序仅保存在本机，
-    不影响服务器；实现见 `lib/src/data/category_order.dart`、`lib/src/ui/category_order_page.dart`
+  - **分类排序页**：在「我的 → 分类排序」中可拖拽排序、**置顶**（钉住的分类始终最前）、
+    **隐藏**（不出现在筛选条，可在排序页恢复）；偏好仅保存在本机，不影响服务器；
+    新分类自动追加到末尾、服务器删除的分类自动忽略；
+    实现见 `lib/src/data/category_order.dart`、`lib/src/ui/category_order_page.dart`
 - **原生文章详情**：移动端用 WebView 阅读器完整渲染正文（站点 CSS 样式 /
   自定义字体 base64 内嵌 / 图片自适应与懒加载 / Ruby 振假名 / 代码块语言标签与复制），
   支持选中复制，分享 / 浏览器打开；无法使用 WebView 的平台（Web/桌面）退回 flutter_html 排版
@@ -90,7 +97,7 @@ flutter build ios --release
 - 已生成发布密钥库：`android/app/ybh-release.jks`
 - 签名参数：`android/key.properties`（已加入 `.gitignore`）
 - 别名 `ybh-blog`，密码 `YBH-Blog-2026-Release-Key`（请妥善保管；正式上架前建议重新生成自己的密钥库）
-- 应用 ID：`cn.yibianhui.blog`，应用名：`YBH`，版本 `0.0.9 (9)`
+- 应用 ID：`cn.yibianhui.blog`，应用名：`YBH`，版本 `0.0.10 (10)`
 
 ## 常见开发命令
 
@@ -111,13 +118,15 @@ dart run flutter_native_splash:create # 重新生成启动屏
 本项目以 **MIT 许可证** 开源，详见 [LICENSE](./LICENSE)。
 
 - 仓库地址（GitHub）：<https://github.com/Yibianhui/YBH-Blog-App>
-- 欢迎通过 Issue / Pull Request 参与贡献。提交前请运行：
+- 欢迎通过 Issue / Pull Request 参与贡献，完整流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)。提交前请运行：
 
 ```powershell
 flutter analyze
 flutter test
 ```
 
+- 每次 PR 会自动运行 CI（`flutter analyze --fatal-infos` / `flutter test`），两项均需通过。
+- 推送 `v*` 标签（如 `git tag v0.0.10 && git push origin v0.0.10`）会自动构建 split APK 并创建 Release。
 - 分类顺序等用户偏好仅保存在本机 `SharedPreferences`，不会上传。
 - 发布构建产物（APK / Web / 源码包）归档在同级目录 `YBH-blog-release/`，不纳入本源码仓库。
 
