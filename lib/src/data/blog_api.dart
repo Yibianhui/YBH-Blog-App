@@ -32,6 +32,7 @@ class PostSummary {
     required this.content,
     required this.link,
     required this.terms,
+    this.status = 'publish',
   });
 
   final int id;
@@ -41,6 +42,18 @@ class PostSummary {
   final String content;
   final String link;
   final List<String> terms;
+
+  /// 文章状态：publish / draft / pending / future / private。
+  final String status;
+
+  /// 非已发布状态的中文标签（用于在列表中提示投稿进度）。
+  String? get statusLabel => switch (status) {
+        'draft' => '草稿',
+        'pending' => '待审核',
+        'future' => '待发布',
+        'private' => '私密',
+        _ => null,
+      };
 
   /// 随机封面图（Sakurairo 图库，302 跳转到真实图片）。
   String get coverUrl => AppConfig.coverUrl(id);
@@ -71,6 +84,7 @@ class PostSummary {
       content: (json['content'] as Map?)?['rendered'] as String? ?? '',
       link: (json['link'] as String?) ?? AppConfig.blogUrl,
       terms: terms,
+      status: (json['status'] as String?) ?? 'publish',
     );
   }
 }

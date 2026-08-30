@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../app_config.dart';
 import '../data/blog_api.dart';
+import '../data/category_order.dart';
 import '../data/update_checker.dart';
 import '../data/wp_auth.dart';
 import 'editor_page.dart';
@@ -35,6 +36,9 @@ class _ProfileTabState extends State<ProfileTab> {
   bool _loadingPosts = false;
   bool _postsError = false;
 
+  /// 分类偏好（置顶 / 隐藏 数量），用于「分类管理」入口的概要展示。
+  CategoryPrefs _categoryPrefs = const CategoryPrefs();
+
   String _version = '…';
   String _buildNumber = '';
 
@@ -42,6 +46,7 @@ class _ProfileTabState extends State<ProfileTab> {
   void initState() {
     super.initState();
     _loadVersion();
+    _loadCategoryPrefs();
     if (wpAuth.isLoggedIn) _loadMyPosts();
   }
 
@@ -131,11 +136,34 @@ class _ProfileTabState extends State<ProfileTab> {
     }
   }
 
+  /// 「分类管理」入口的概要文案：已置顶 / 已隐藏的数量。
+  String get _categorySummary {
+    final pinned = _categoryPrefs.pinned.length;
+    final hidden = _categoryPrefs.hidden.length;
+    final parts = <String>[];
+    if (pinned > 0) parts.add('已置顶 $pinned 个');
+    if (hidden > 0) parts.add('已隐藏 $hidden 个');
+    if (parts.isEmpty) return '已自定义排序';
+    return '${parts.join(' · ')} · 点此修改';
+  }
+
+  Future<void> _loadCategoryPrefs() async {
+    final prefs = await CategoryOrderStore.load();
+    if (!mounted) return;
+    setState(() => _categoryPrefs = prefs);
+  }
+
   Future<void> _writeArticle() async {
     final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(builder: (_) => const EditorPage()),
     );
     if (result == true && mounted) _loadMyPosts();
+  }
+
+  Future<void> _openCategoryOrder() async {
+    await widget.onOpenCategoryOrder?.call();
+    if (!mounted) return;
+    await _loadCategoryPrefs();
   }
 
   @override
@@ -162,16 +190,74 @@ class _ProfileTabState extends State<ProfileTab> {
             onWrite: _writeArticle,
           ),
         const SizedBox(height: 20),
-        if (wpAuth.isLoggedIn) ...[
-          Text(
-            '我的文章',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              color: colorScheme.primary,
-            ),
+        // 分类管理放在最前面：这是最常用的个性化入口，以前藏在页面底部不容易找到。
+        Card(
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.tune_outlined),
+                title: const Text('分类管理'),
+                subtitle: Text(
+                  _categoryPrefs.isEmpty
+                      ? '置顶常用分类 · 隐藏不感兴趣的分类 · 拖动调整顺序'
+                      : _categorySummary,
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!_categoryPrefs.isEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          '已设置',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: colorScheme.onPrimaryContainer,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.chevron_right_outlined),
+                  ],
+                ),
+                onTap: widget.onOpenCategoryOrder == null
+                    ? null
+                    : () async {
+                        await _openCategoryOrder();
+                      },
+              ),
+            ],
           ),
-          const SizedBox(height: 10),
+        ),
+        const SizedBox(height: 24),
+        if (wpAuth.isLoggedIn) ...[
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '我的文章',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: colorScheme.primary,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: '刷新',
+                icon: const Icon(Icons.refresh_outlined, size: 20),
+                onPressed: _loadingPosts ? null : _loadMyPosts,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
           _MyPostsList(
             loading: _loadingPosts,
             error: _postsError,
@@ -234,25 +320,6 @@ class _ProfileTabState extends State<ProfileTab> {
                     uri: Uri.parse(AppConfig.blogUrl),
                   ),
                 ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 24),
-        Card(
-          clipBehavior: Clip.antiAlias,
-          child: Column(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.sort_outlined),
-                title: const Text('分类排序'),
-                subtitle: const Text('调整「文章」页分类筛选的显示顺序'),
-                trailing: const Icon(Icons.chevron_right_outlined),
-                onTap: widget.onOpenCategoryOrder == null
-                    ? null
-                    : () async {
-                        await widget.onOpenCategoryOrder!();
-                      },
               ),
             ],
           ),
@@ -470,28 +537,55 @@ class _LoggedInHeader extends StatelessWidget {
                   : null,
             ),
             const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    user.name,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            user.name,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (user.roleLabel.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: colorScheme.secondaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              user.roleLabel,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: colorScheme.onSecondaryContainer,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
-                  ),
-                  if (user.email != null && user.email!.isNotEmpty)
-                    Text(
-                      user.email!,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        color: colorScheme.outline,
+                    if (user.email != null && user.email!.isNotEmpty)
+                      Text(
+                        user.email!,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: colorScheme.outline,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
             FilledButton.icon(
               onPressed: onWrite,
               icon: const Icon(Icons.edit_outlined, size: 18),
@@ -562,9 +656,48 @@ class _MyPostsList extends StatelessWidget {
     return Column(
       children: [
         for (var i = 0; i < posts.length; i++) ...[
-          PostCard(post: posts[i], onTap: () => onOpen(i)),
+          _MyPostItem(post: posts[i], onTap: () => onOpen(i)),
           const SizedBox(height: 12),
         ],
+      ],
+    );
+  }
+}
+
+/// 「我的文章」的单条：在卡片右上角叠一个状态角标（草稿 / 待审核）。
+class _MyPostItem extends StatelessWidget {
+  const _MyPostItem({required this.post, required this.onTap});
+
+  final PostSummary post;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = post.statusLabel;
+    if (label == null) return PostCard(post: post, onTap: onTap);
+    final colorScheme = Theme.of(context).colorScheme;
+    return Stack(
+      children: [
+        PostCard(post: post, onTap: onTap),
+        PositionedDirectional(
+          top: 8,
+          end: 8,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: colorScheme.tertiaryContainer.withValues(alpha: 0.95),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: colorScheme.onTertiaryContainer,
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }

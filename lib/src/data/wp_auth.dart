@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -19,6 +20,10 @@ class WpUser {
     this.nickname,
     this.email,
     this.avatarUrl,
+    this.roles = const <String>[],
+    this.capabilities = const <String>{},
+    /// 是否成功读取到能力列表；为 false 时 [canPublish] 只是乐观猜测。
+    this.capabilitiesKnown = false,
   });
 
   final int id;
@@ -28,13 +33,48 @@ class WpUser {
   final String? email;
   final String? avatarUrl;
 
+  /// 站点角色（如 administrator / editor / author / contributor / subscriber）。
+  final List<String> roles;
+
+  /// 能力集合（来自 `GET /users/me?context=edit` 的 `capabilities`）。
+  final Set<String> capabilities;
+
+  /// 是否真的读到了能力集合。
+  final bool capabilitiesKnown;
+
   String get name => (displayName ?? nickname ?? login).trim().isEmpty
       ? login
       : (displayName ?? nickname ?? login);
 
+  /// 是否可以直接发布（对应 WordPress 的 `publish_posts` 能力）。
+  ///
+  /// 「作者 / 编辑 / 管理员」为 true；「投稿者（contributor）」为 false，
+  /// 其投稿只能进入「待审核」。读不到能力时乐观返回 true（由服务端错误兜底）。
+  bool get canPublish =>
+      !capabilitiesKnown || capabilities.contains('publish_posts');
+
+  /// 角色中文名，用于界面提示。
+  String get roleLabel => switch (roles.isEmpty ? '' : roles.first) {
+        'administrator' => '管理员',
+        'editor' => '编辑',
+        'author' => '作者',
+        'contributor' => '投稿者',
+        'subscriber' => '订阅者',
+        String r when r.isNotEmpty => r,
+        _ => '',
+      };
+
   factory WpUser.fromJson(Map<String, dynamic> json) {
     final avatars = json['avatar_urls'];
     final String? avatar = avatars is Map ? (avatars['96'] as String?) : null;
+    final caps = json['capabilities'];
+    final Set<String>? capSet = caps is Map
+        ? caps.entries
+            .where((e) => e.value == true)
+            .map((e) => '${e.key}')
+            .toSet()
+        : null;
+    final rolesRaw = json['roles'];
     return WpUser(
       id: (json['id'] as num?)?.toInt() ?? 0,
       login: (json['slug'] as String?) ?? (json['username'] as String?) ?? '',
@@ -42,6 +82,11 @@ class WpUser {
       nickname: _clean(json['nickname']),
       email: _clean(json['email']),
       avatarUrl: avatar,
+      roles: rolesRaw is List
+          ? rolesRaw.map((e) => '$e').toList(growable: false)
+          : const <String>[],
+      capabilities: capSet ?? const <String>{},
+      capabilitiesKnown: capSet != null,
     );
   }
 
@@ -61,6 +106,65 @@ class WpUser {
 
   static String? _clean(Object? v) =>
       v is String ? v.trim() : null;
+}
+
+/// 投稿 / 发布的返回结果。
+class PublishResult {
+  const PublishResult._({
+    required this.ok,
+    required this.status,
+    this.link,
+    this.message,
+    this.statusCode,
+    this.downgraded = false,
+  });
+
+  /// 成功（HTTP 200/201）。
+  const PublishResult.success({required this.status, required this.link})
+      : ok = true,
+        message = null,
+        statusCode = null,
+        downgraded = false;
+
+  /// 失败：[message] 为面向用户的说明，含服务端返回的原始原因。
+  const PublishResult.failure(this.message, {this.statusCode})
+      : ok = false,
+        status = '',
+        link = null,
+        downgraded = false;
+
+  final bool ok;
+
+  /// 文章最终状态：'publish' / 'draft' / 'pending'。
+  final String status;
+
+  /// 文章链接。
+  final String? link;
+
+  /// 失败原因（成功时为 null）。
+  final String? message;
+
+  final int? statusCode;
+
+  /// 是否由「直接发布」自动降级成了「待审核」。
+  final bool downgraded;
+
+  /// 给用户看的结果提示语。
+  String get notice => switch (status) {
+        'pending' => '已提交审核，管理员通过后即可公开显示',
+        'draft' => '已保存为草稿，可在后台继续编辑',
+        'future' => '已设置为定时发布',
+        _ => '已发布',
+      };
+
+  PublishResult copyWithDowngraded() => PublishResult._(
+        ok: ok,
+        status: status,
+        link: link,
+        message: message,
+        statusCode: statusCode,
+        downgraded: true,
+      );
 }
 
 /// 鉴权方式。
@@ -203,6 +307,34 @@ class WpAuth {
     return true;
   }
 
+  /// 用已拿到的 Authorization 头拉取自己的资料。
+  ///
+  /// 优先请求 `?context=edit`——只有它才会返回 `roles` 与 `capabilities`，
+  /// 用于判断「投稿者是否能直接发布」。若站点安全插件屏蔽了该 context，
+  /// 退回普通请求（此时拿不到能力，[WpUser.canPublish] 乐观视为可发布，
+  /// 由发布接口的服务端错误兜底）。
+  Future<WpUser?> _fetchMe(String authorization) async {
+    for (final withEdit in <bool>[true, false]) {
+      final uri = Uri.parse('${AppConfig.apiBase}/users/me').replace(
+        queryParameters: withEdit ? {'context': 'edit'} : null,
+      );
+      try {
+        final response = await http
+            .get(uri, headers: {'Authorization': authorization})
+            .timeout(_timeout);
+        if (response.statusCode != 200) continue;
+        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        if (decoded is! Map<String, dynamic>) continue;
+        final me = WpUser.fromJson(decoded);
+        if (!withEdit || me.capabilitiesKnown) return me;
+        // context=edit 通了但没返回能力字段，继续尝试普通请求拿别的兜底。
+      } catch (_) {
+        // 网络异常：尝试下一种。
+      }
+    }
+    return null;
+  }
+
   /// JWT 登录：换取令牌并拉取用户资料。任一步非 200 均返回 null。
   Future<(String, WpUser)?> _loginJwt(String user, String pass) async {
     final http.Response tokenResp;
@@ -226,24 +358,10 @@ class WpAuth {
     final jwt = tokenJson is Map ? (tokenJson['token'] as String?) : null;
     if (jwt == null || jwt.isEmpty) return null;
 
-    // 用令牌请求 /users/me 拿完整资料（含 id / 头像）。
-    try {
-      final meResp = await http
-          .get(
-            Uri.parse('${AppConfig.apiBase}/users/me'),
-            headers: {'Authorization': 'Bearer $jwt'},
-          )
-          .timeout(_timeout);
-      if (kDebugMode) debugPrint('[wp_auth] users/me 状态码: ${meResp.statusCode}');
-      if (meResp.statusCode == 200) {
-        final decoded = jsonDecode(utf8.decode(meResp.bodyBytes));
-        if (decoded is Map<String, dynamic>) {
-          return (jwt, WpUser.fromJson(decoded));
-        }
-      }
-    } catch (_) {
-      // 令牌有效但拉资料失败：用 JWT 响应里的资料兜底。
-    }
+    // 用令牌拉取完整资料（含 id / 头像 / 角色 / 能力）。
+    final me = await _fetchMe('Bearer $jwt');
+    if (me != null) return (jwt, me);
+
     final display = _asString(tokenJson['user_display_name']) ??
         _asString(tokenJson['user_nicename']) ??
         user;
@@ -255,25 +373,19 @@ class WpAuth {
   /// 应用密码（Basic Auth）登录：用「用户名 + 应用密码」请求 /users/me。
   Future<(String, WpUser)?> _loginBasic(String user, String appPassword) async {
     final basic = base64Encode(utf8.encode('$user:$appPassword'));
-    final http.Response response;
-    try {
-      response = await http
-          .get(
-            Uri.parse('${AppConfig.apiBase}/users/me'),
-            headers: {'Authorization': 'Basic $basic'},
-          )
-          .timeout(_timeout);
-    } catch (_) {
-      return null;
-    }
-    if (response.statusCode != 200) return null;
-    try {
-      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-      if (decoded is! Map<String, dynamic>) return null;
-      return (basic, WpUser.fromJson(decoded));
-    } catch (_) {
-      return null;
-    }
+    final me = await _fetchMe('Basic $basic');
+    if (me == null) return null;
+    return (basic, me);
+  }
+
+  /// 重新拉取当前用户资料（角色变更或需要刷新能力时调用）。
+  Future<WpUser?> refreshMe() async {
+    if (!isLoggedIn) return null;
+    final me = await _fetchMe(authHeaders.values.first);
+    if (me == null) return null;
+    _user = me;
+    unawaited(_persist());
+    return me;
   }
 
   Future<void> logout() async {
@@ -286,75 +398,158 @@ class WpAuth {
   }
 
   /// 拉取「我的文章」列表（当前登录用户）。
+  ///
+  /// 会带上「草稿 / 待审核」一起拉，方便投稿者看到自己刚提交的内容；
+  /// 若站点不接受该参数（老版本 WP 或权限限制），自动退回只拉已发布。
   Future<List<PostSummary>> fetchMyPosts({int page = 1, int perPage = 20}) async {
     if (!isLoggedIn) return const [];
     // JWT 但未能拿到用户 id（极少见的兜底情况）：不按作者过滤会拉全站，
     // 这里直接返回空，避免误展示他人文章。
     if (_user == null || _user!.id == 0) return const [];
-    final uri = Uri.parse('${AppConfig.apiBase}/posts').replace(
-      queryParameters: {
-        'per_page': '$perPage',
-        'page': '$page',
-        'author': '${_user!.id}',
-        '_embed': '1',
-        'orderby': 'date',
-        'order': 'desc',
-      },
-    );
-    final response = await http
-        .get(uri, headers: authHeaders)
-        .timeout(_timeout);
-    if (response.statusCode != 200) {
-      throw StateError('HTTP ${response.statusCode}');
+
+    Future<List<PostSummary>> request(List<String> statuses) async {
+      final uri = Uri.parse('${AppConfig.apiBase}/posts').replace(
+        queryParameters: {
+          'per_page': '$perPage',
+          'page': '$page',
+          'author': '${_user!.id}',
+          '_embed': '1',
+          'orderby': 'date',
+          'order': 'desc',
+          'status': statuses.join(','),
+        },
+      );
+      final response =
+          await http.get(uri, headers: authHeaders).timeout(_timeout);
+      if (response.statusCode != 200) {
+        throw StateError('HTTP ${response.statusCode}');
+      }
+      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .map(PostSummary.fromJson)
+          .toList();
     }
-    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-    if (decoded is! List) return const [];
-    return decoded
-        .whereType<Map<String, dynamic>>()
-        .map(PostSummary.fromJson)
-        .toList();
+
+    try {
+      return await request(const ['publish', 'draft', 'pending', 'future']);
+    } catch (_) {
+      return request(const ['publish']);
+    }
   }
 
-  /// 发布/草稿文章。
+  /// 发布 / 投稿 / 存草稿。
   ///
   /// [content] 为纯文本（按空行分段，自动包 `<p>`）；
-  /// [status] 取 'publish' 或 'draft'。
-  /// 返回新建文章的可访问链接，失败返回 null。
-  Future<String?> publishPost({
+  /// [status] 取 'publish'、'draft' 或 'pending'（待审核）。
+  ///
+  /// **投稿者（contributor）没有 `publish_posts` 权限**，直接发布会被服务端
+  /// 拒绝。这里做两层保护：
+  ///   1. 已知不能发布时，主动把 'publish' 降级为 'pending'；
+  ///   2. 若服务端仍以 403 拒绝（能力读取失败的情况），自动用 'pending'
+  ///      重试一次，并在 [PublishResult.downgraded] 标记实际状态。
+  Future<PublishResult> publishPost({
     required String title,
     required String content,
     String status = 'publish',
     List<int>? categories,
   }) async {
-    if (!isLoggedIn) return null;
+    if (!isLoggedIn) {
+      return const PublishResult.failure('尚未登录，请先登录后投稿');
+    }
+    // 第一层：能力已知且不能直接发布时，主动降级为待审核。
+    var effective = status;
+    if (status == 'publish' && !(_user?.canPublish ?? true)) {
+      effective = 'pending';
+    }
+    final first = await _createPost(
+      title: title,
+      content: content,
+      status: effective,
+      categories: categories,
+    );
+    if (first.ok) return first;
+
+    // 第二层：能力未知导致直接发布被拒 → 用「待审核」重试一次。
+    if (status == 'publish' &&
+        effective == 'publish' &&
+        first.statusCode == 403) {
+      final retry = await _createPost(
+        title: title,
+        content: content,
+        status: 'pending',
+        categories: categories,
+      );
+      if (retry.ok) return retry.copyWithDowngraded();
+      return retry;
+    }
+    return first;
+  }
+
+  Future<PublishResult> _createPost({
+    required String title,
+    required String content,
+    required String status,
+    List<int>? categories,
+  }) async {
     final body = {
       'title': title,
       'content': _wrapParagraphs(content),
       'status': status,
       if (categories != null && categories.isNotEmpty) 'categories': categories,
     };
-    final response = await http
-        .post(
-          Uri.parse('${AppConfig.apiBase}/posts'),
-          headers: {
-            ...authHeaders,
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode(body),
-        )
-        .timeout(_timeout);
-    if (response.statusCode == 201 || response.statusCode == 200) {
-      try {
-        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-        if (decoded is Map<String, dynamic>) {
-          return decoded['link'] as String?;
-        }
-      } catch (_) {
-        // 发布成功但解析失败，仍视为成功。
-        return AppConfig.blogUrl;
-      }
+    final http.Response response;
+    try {
+      response = await http
+          .post(
+            Uri.parse('${AppConfig.apiBase}/posts'),
+            headers: {
+              ...authHeaders,
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode(body),
+          )
+          .timeout(_timeout);
+    } catch (e) {
+      return PublishResult.failure('网络异常：$e');
     }
-    return null;
+
+    Map<String, dynamic>? json;
+    try {
+      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) json = decoded;
+    } catch (_) {
+      // 非 JSON 响应（如网关返回 HTML 错误页）。
+    }
+
+    if (response.statusCode == 201 || response.statusCode == 200) {
+      final link = json?['link'] as String?;
+      return PublishResult.success(
+        status: (json?['status'] as String?) ?? status,
+        link: (link == null || link.isEmpty) ? AppConfig.blogUrl : link,
+      );
+    }
+    return PublishResult.failure(
+      _serverMessage(json, response.statusCode),
+      statusCode: response.statusCode,
+    );
+  }
+
+  /// 把服务端返回的错误转成用户能看懂的话；带常见 403 的补充说明。
+  static String _serverMessage(Map<String, dynamic>? json, int code) {
+    final raw = json?['message'] as String?;
+    final base = (raw == null || raw.trim().isEmpty)
+        ? '提交失败（HTTP $code）'
+        : raw.trim();
+    if (code != 403) return base;
+    if (base.contains('publish') || base.contains('发布')) {
+      return '$base\n当前账号可能没有直接发布权限，可改用「提交审核」。';
+    }
+    if (base.contains('category') || base.contains('分类')) {
+      return '$base\n可能没有在所选分类下发文的权限，可尝试改为「未分类」。';
+    }
+    return base;
   }
 
   /// 纯文本按空行分段包成 HTML 段落，并转义特殊字符避免破坏排版。
@@ -387,5 +582,8 @@ extension WpUserX on WpUser {
         'nickname': nickname,
         'email': email,
         'avatar_urls': {'96': avatarUrl},
+        'roles': roles,
+        // 只持久化「能否发布」这一条结论，避免把整张能力表塞进本地存储。
+        'capabilities': {'publish_posts': canPublish},
       };
 }

@@ -152,7 +152,7 @@ class _HomeShellPageState extends State<HomeShellPage> {
           sizing: StackFit.expand,
           index: _tab,
           children: [
-            PostsTab(key: _postsKey),
+            PostsTab(key: _postsKey, onOpenCategoryOrder: _openCategoryOrder),
             BlogWebViewPage(key: _webKey, uiState: _webUi),
             ProfileTab(onOpenCategoryOrder: _openCategoryOrder),
           ],
@@ -219,6 +219,11 @@ class _HomeShellPageState extends State<HomeShellPage> {
                 );
               },
               icon: const Icon(Icons.search),
+            ),
+            IconButton(
+              tooltip: '分类管理（置顶 / 隐藏 / 排序）',
+              onPressed: () => _openCategoryOrder(),
+              icon: const Icon(Icons.tune_outlined),
             ),
             IconButton(
               tooltip: '刷新文章',

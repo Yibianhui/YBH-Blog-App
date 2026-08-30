@@ -10,7 +10,10 @@ import 'post_detail_page.dart';
 /// - 分类筛选 chips
 /// - 下拉刷新、触底加载更多、加载/错误状态
 class PostsTab extends StatefulWidget {
-  const PostsTab({super.key});
+  const PostsTab({super.key, this.onOpenCategoryOrder});
+
+  /// 打开「分类管理」页（由外壳提供，避免在文章页里重复导航逻辑）。
+  final Future<void> Function()? onOpenCategoryOrder;
 
   @override
   State<PostsTab> createState() => PostsTabState();
@@ -30,6 +33,9 @@ class PostsTabState extends State<PostsTab> {
   bool _categoriesLoading = true;
   bool _hasMore = false;
   Object? _error;
+
+  /// 已隐藏的分类数量（在筛选条末尾的管理入口上提示，避免用户忘记自己藏过）。
+  int _hiddenCount = 0;
 
   @override
   void initState() {
@@ -68,6 +74,7 @@ class PostsTabState extends State<PostsTab> {
       setState(() {
         _rawCategories = categories;
         _categories = _applyPrefs(categories, prefs);
+        _hiddenCount = _countHidden(categories, prefs);
         _categoriesLoading = false;
       });
       await _deselectHidden(prefs);
@@ -75,6 +82,12 @@ class PostsTabState extends State<PostsTab> {
       if (!mounted) return;
       setState(() => _categoriesLoading = false);
     }
+  }
+
+  /// 统计「确实存在且被隐藏」的分类数量。
+  int _countHidden(List<BlogCategory> base, CategoryPrefs prefs) {
+    final ids = base.map((c) => c.id).toSet();
+    return prefs.hidden.where(ids.contains).length;
   }
 
   /// 套用本地偏好：置顶优先 → 自定义顺序 → 服务器顺序，并剔除已隐藏的分类。
@@ -106,7 +119,10 @@ class PostsTabState extends State<PostsTab> {
     if (_categoriesLoading || _rawCategories.isEmpty) return;
     final prefs = await CategoryOrderStore.load();
     if (!mounted) return;
-    setState(() => _categories = _applyPrefs(_rawCategories, prefs));
+    setState(() {
+      _categories = _applyPrefs(_rawCategories, prefs);
+      _hiddenCount = _countHidden(_rawCategories, prefs);
+    });
     await _deselectHidden(prefs);
   }
 
@@ -199,6 +215,8 @@ class PostsTabState extends State<PostsTab> {
           loading: _categoriesLoading,
           selectedId: _selectedCategoryId,
           onSelected: _selectCategory,
+          onManage: widget.onOpenCategoryOrder,
+          hiddenCount: _hiddenCount,
         ),
         const Divider(height: 1),
         Expanded(child: _buildBody(context)),
@@ -255,19 +273,25 @@ class PostsTabState extends State<PostsTab> {
   }
 }
 
-/// 分类筛选横向滚动条。
+/// 分类筛选横向滚动条。末尾固定一个「管理」入口，让置顶/隐藏功能不必去「我的」页翻找。
 class _CategoryFilterBar extends StatelessWidget {
   const _CategoryFilterBar({
     required this.categories,
     required this.loading,
     required this.selectedId,
     required this.onSelected,
+    this.onManage,
+    this.hiddenCount = 0,
   });
 
   final List<BlogCategory> categories;
   final bool loading;
   final int? selectedId;
   final ValueChanged<int?> onSelected;
+  final Future<void> Function()? onManage;
+
+  /// 已隐藏的分类数（>0 时在管理入口上标出，避免用户忘记自己藏过）。
+  final int hiddenCount;
 
   @override
   Widget build(BuildContext context) {
@@ -280,6 +304,7 @@ class _CategoryFilterBar extends StatelessWidget {
       );
     }
     if (categories.isEmpty) return const SizedBox.shrink();
+    final colorScheme = Theme.of(context).colorScheme;
     return SizedBox(
       height: 52,
       child: ListView(
@@ -301,6 +326,24 @@ class _CategoryFilterBar extends StatelessWidget {
                 label: Text('${category.name} · ${category.count}'),
                 selected: selectedId == category.id,
                 onSelected: (_) => onSelected(category.id),
+              ),
+            ),
+          if (onManage != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: ActionChip(
+                avatar: Icon(Icons.tune_outlined,
+                    size: 16, color: colorScheme.primary),
+                label: Text(
+                  hiddenCount > 0 ? '管理（已隐藏 $hiddenCount）' : '管理',
+                  style: TextStyle(
+                    color: colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                backgroundColor: colorScheme.surface,
+                side: BorderSide(color: colorScheme.outlineVariant),
+                onPressed: () => onManage!(),
               ),
             ),
         ],

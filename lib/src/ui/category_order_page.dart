@@ -5,7 +5,121 @@ import 'package:flutter/material.dart';
 import '../data/blog_api.dart';
 import '../data/category_order.dart';
 
-/// 分类排序页：调整「文章」页分类筛选条中分类的显示方式。
+/// 顶部引导卡：用一行一个动作的方式说明三个功能，避免用户不知道能做什么。
+class _GuideCard extends StatelessWidget {
+  const _GuideCard({this.pinnedCount = 0, this.hiddenCount = 0});
+
+  final int pinnedCount;
+  final int hiddenCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final summary = <String>[
+      if (pinnedCount > 0) '已置顶 $pinnedCount 个',
+      if (hiddenCount > 0) '已隐藏 $hiddenCount 个',
+    ].join(' · ');
+    return Card(
+      color: colorScheme.surfaceContainerLow,
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '调整「文章」页顶部分类条',
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+                if (summary.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      summary,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const _GuideRow(
+              icon: Icons.push_pin_outlined,
+              text: '点图钉置顶：常用分类永远排在最前',
+            ),
+            const _GuideRow(
+              icon: Icons.visibility_off_outlined,
+              text: '点眼睛隐藏：不感兴趣的分类不再出现在筛选条',
+            ),
+            const _GuideRow(
+              icon: Icons.drag_handle_outlined,
+              text: '长按右侧手柄拖动：调整其余分类的顺序',
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '设置只保存在本机，不会影响站点；点右上角「重置」可恢复默认。',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.5,
+                color: colorScheme.outline,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GuideRow extends StatelessWidget {
+  const _GuideRow({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 15, color: colorScheme.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.5,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 分类管理页：调整「文章」页分类筛选条中分类的显示方式。
 ///
 /// 支持三种调整：
 /// - **拖拽排序**：长按右侧手柄拖动；
@@ -14,6 +128,9 @@ import '../data/category_order.dart';
 ///
 /// 偏好仅保存在本机（[CategoryOrderStore]），不影响服务器。
 /// 「重置」可恢复为服务器默认排序（按文章数降序）。
+///
+/// 入口有三处：「文章」页右上角按钮、分类筛选条末尾的「管理」、
+/// 以及「我的 → 分类管理」。
 class CategoryOrderPage extends StatefulWidget {
   const CategoryOrderPage({super.key, this.initialCategories = const []});
 
@@ -161,15 +278,15 @@ class _CategoryOrderPageState extends State<CategoryOrderPage> {
     setState(() {
       _dirty = true;
       final hidden = _prefs.hidden.toSet();
+      // 隐藏与置顶互斥：隐藏时自动取消置顶。
+      final pinned = _prefs.pinned.toSet();
       if (hidden.contains(id)) {
         hidden.remove(id);
       } else {
         hidden.add(id);
-        // 隐藏与置顶互斥：隐藏时自动取消置顶。
-        final pinned = _prefs.pinned.toSet()..remove(id);
-        _prefs = _prefs.copyWith(hidden: hidden, pinned: pinned);
+        pinned.remove(id);
       }
-      _prefs = _prefs.copyWith(hidden: hidden);
+      _prefs = _prefs.copyWith(hidden: hidden, pinned: pinned);
       _display = _reorder(_all, _prefs);
     });
   }
@@ -224,7 +341,7 @@ class _CategoryOrderPageState extends State<CategoryOrderPage> {
     final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('分类排序'),
+        title: const Text('分类管理'),
         bottom: _loading
             ? const PreferredSize(
                 preferredSize: Size.fromHeight(3),
@@ -303,12 +420,10 @@ class _CategoryOrderPageState extends State<CategoryOrderPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
-          child: Text(
-            '长按右侧手柄拖动调整顺序；点图钉置顶、点眼睛隐藏。'
-            '${pinnedCount > 0 ? '已置顶 $pinnedCount 个，' : ''}'
-            '${hiddenCount > 0 ? '已隐藏 $hiddenCount 个。' : ''}',
-            style: TextStyle(fontSize: 13, color: colorScheme.outline, height: 1.6),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+          child: _GuideCard(
+            pinnedCount: pinnedCount,
+            hiddenCount: hiddenCount,
           ),
         ),
         Expanded(

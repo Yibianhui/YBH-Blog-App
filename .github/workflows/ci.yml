@@ -32,6 +32,20 @@ jobs:
       - name: Flutter version
         run: flutter --version
 
+      # 签名私钥（keystore + 密码）一旦进入版本库就等于公开，且无法从历史里真正抹掉。
+      # 这里做一道硬闸：发现被跟踪就立即失败。
+      - name: Guard against committed signing keys
+        run: |
+          set -e
+          bad=$(git ls-files | grep -E '(^|/)(key\.properties)$|\.(jks|keystore|p12|pfx)$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::签名密钥文件被提交进版本库："
+            echo "$bad"
+            echo "请先 git rm --cached 这些文件并轮换密钥。"
+            exit 1
+          fi
+          echo "OK: no signing keys tracked"
+
       - name: Install dependencies
         run: flutter pub get
 
